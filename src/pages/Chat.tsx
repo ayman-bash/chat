@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Users, Plus, Settings, ChevronDown, ChevronRight} from 'lucide-react';
+import { Users, Plus, Settings, ChevronDown, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatMessage } from '../components/ChatMessage';
 import { ChatInput } from '../components/ChatInput';
@@ -24,20 +24,15 @@ import {
   deleteMessage
 } from '../services/api';
 import { 
-  initializeSocket, 
-  disconnectSocket, 
-  joinChat, 
-  leaveChat, 
-  sendChatMessage, 
-  onNewMessage,
-  onUserTyping,
-  emitTyping,
-  onUserOnline,
-  onUserOffline
+  socket, initializeSocket, disconnectSocket, joinChat, leaveChat, 
+  sendChatMessage, onNewMessage, onUserTyping, onUserStopTyping, 
+  emitTyping, stopTyping, onUserOnline, onUserOffline, closeGame, sendGameInvitation // Removed startGame
 } from '../services/socket';
 import { useNavigate } from 'react-router-dom';
 import GroupProfile from './GroupProfile';
 import FloatingPaths from '../components/FloatingPaths';
+import { TypingIndicator } from '../components/TypingIndicator';
+import { TicTacToe } from '../components/TicTacToe'; // Nouveau composant
 
 // Define GEMINI_USER locally since import is causing issues
 const GEMINI_USER: User = {
@@ -82,6 +77,7 @@ const Chat = () => {
     inputMessageRef.current = value;
   };
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [gameState, setGameState] = useState<any>(null); // État du jeu Tic-Tac-Toe
 
   const loadGroups = useCallback(async () => {
     try {
@@ -149,27 +145,56 @@ const Chat = () => {
       }
     });
     
-    onUserTyping(({ userId, chatId }) => {
+    const handleUserTyping = ({ chatId, userId, username }: { chatId: string; userId: string; username: string }) => {
+      console.log('Received typing event in component:', { chatId, userId, username });
+      
+      // Ignore own typing events
       if (userId === user.id) return;
       
-      setTypingUsers((prev) => ({
-        ...prev,
-        [userId]: chatId
-      }));
-      
-      // Clear typing indicator after 3 seconds
-      if (typingTimeoutRef.current[userId]) {
-        clearTimeout(typingTimeoutRef.current[userId]);
+      // For direct messages, check both possible formats of chat IDs
+      if (selectedChat) {
+        const isChatMatch = isGroup(selectedChat) 
+          ? chatId === selectedChat.id  // Group chat - direct ID match
+          : (
+              // Direct chat - check both formats (A_B or B_A)
+              chatId === `dm_${user.id}_${selectedChat.id}` || 
+              chatId === `dm_${selectedChat.id}_${user.id}`
+            );
+        
+        if (isChatMatch) {
+          setTypingUsers(prev => ({
+            ...prev,
+            [userId]: username
+          }));
+        }
       }
+    };
+  
+    const handleUserStopTyping = ({ chatId, userId, username }: { chatId: string; userId: string; username: string }) => {
+      console.log('Received stop typing event in component:', { chatId, userId, username });
       
-      typingTimeoutRef.current[userId] = setTimeout(() => {
-        setTypingUsers((prev) => {
-          const newState = { ...prev };
-          delete newState[userId];
-          return newState;
-        });
-      }, 3000);
-    });
+      if (userId === user.id) return;
+      
+      if (selectedChat) {
+        const isChatMatch = isGroup(selectedChat) 
+          ? chatId === selectedChat.id
+          : (
+              chatId === `dm_${user.id}_${selectedChat.id}` || 
+              chatId === `dm_${selectedChat.id}_${user.id}`
+            );
+        
+        if (isChatMatch) {
+          setTypingUsers(prev => {
+            const updated = { ...prev };
+            delete updated[userId];
+            return updated;
+          });
+        }
+      }
+    };
+    
+    onUserTyping(handleUserTyping);
+    onUserStopTyping(handleUserStopTyping);
     
     onUserOnline((userId) => {
       setOnlineUsers((prev) => new Set(prev).add(userId));
@@ -182,12 +207,88 @@ const Chat = () => {
         return newSet;
       });
     });
-    
+
+    // Configurer l'écouteur pour les mises à jour du jeu
+    if (socket) {
+      socket.on('game_update', (game) => {
+        console.log('Received game update:', game);
+        // Si le jeu est actif, l'afficher
+        if (game) {
+          setGameState(game);
+        } else {
+          // Si le jeu est terminé (null), réinitialiser l'état
+          setGameState(null);
+        }
+      });
+      
+      // Écouter quand un joueur quitte le jeu
+      socket.on('game_player_left', (data) => {
+        console.log('Player left the game:', data);
+        
+        // Afficher un message temporaire dans le chat
+        const tempMessage: Message = {
+          id: Date.now().toString(),
+          content: `${data.username} a quitté le jeu. La partie se terminera dans 3 secondes...`,
+          sender_id: 'system',
+          receiver_id: selectedChat && isGroup(selectedChat) ? undefined : user?.id,
+          group_id: selectedChat && isGroup(selectedChat) ? selectedChat.id : undefined,
+          created_at: new Date().toISOString(),
+          sender: {
+            id: 'system',
+            username: 'Système',
+            email: '',
+            avatar: '',
+          },
+          is_deleted: false,
+          timestamp: new Date().toISOString(),
+          reply_to_id: null,
+        };
+        
+        setMessages(prev => [...prev, tempMessage]);
+      });
+
+      // Écouter l'invitation à une partie
+      socket.on('game_invitation', (data) => {
+        // Ajouter un message dans le chat avec un bouton pour rejoindre la partie
+        const inviteMessage: Message = {
+          id: Date.now().toString(),
+          content: `${data.username} vous invite à jouer au Tic Tac Toe! Cliquez sur "Rejoindre" pour commencer la partie.`,
+          sender_id: 'system',
+          receiver_id: selectedChat && isGroup(selectedChat) ? undefined : user?.id,
+          group_id: selectedChat && isGroup(selectedChat) ? selectedChat.id : undefined,
+          created_at: new Date().toISOString(),
+          sender: {
+            id: 'system',
+            username: 'Système',
+            email: '',
+            avatar: '',
+          },
+          is_deleted: false,
+          timestamp: new Date().toISOString(),
+          reply_to_id: null,
+          // Ajouter une propriété pour indiquer que c'est une invitation de jeu
+          game_invitation: true
+        };
+        
+        setMessages(prev => [...prev, inviteMessage]);
+      });
+    }
+
     return () => {
       disconnectSocket();
+      onUserTyping(() => {}); // Unsubscribe from typing events
+      onUserStopTyping(() => {}); // Unsubscribe from stop typing events
+      
+      // Désabonner de tous les événements liés au jeu
+      if (socket) {
+        socket.off('game_update');
+        socket.off('game_player_left');
+        socket.off('game_invitation');
+      }
     };
   }, [user, selectedChat, isAtBottom]);
 
+  
   // Subscribe to real-time message updates
   useEffect(() => {
     if (!selectedChat || !user) return;
@@ -314,35 +415,135 @@ const Chat = () => {
         }
       } else {
         // Send a normal message
+        // Log the file information for debugging
+        if (image) {
+          console.log(`Sending file: ${image.name}, type: ${image.type}, size: ${image.size} bytes`);
+        }
+    
+        // For non-Gemini messages
         const message = await sendMessage(
           content,
           image || null,
           isGroup(selectedChat) ? undefined : selectedChat.id,
           isGroup(selectedChat) ? selectedChat.id : undefined
         );
-  
+    
         if (message) {
           sendChatMessage(message); // Emit the message via socket
+          
+          // Log the message data for debugging
+          console.log('Message sent successfully:', message);
+          
           setMessages((prev) => {
             if (prev.some((m) => m.id === message.id)) {
               return prev;
             }
             return [...prev, message];
           });
+          
+          // Ensure we're scrolling to bottom after sending
+          setIsAtBottom(true);
         }
       }
     } catch (error) {
       console.error('Error in handleSendMessage:', error);
     }
+    stopTyping(selectedChat.id, user.id); // Stop typing when the message is sent
   };
   
 
-  const handleTyping = () => {
+  // S'assurer que username est stocké dans localStorage pour l'indicateur de frappe
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('username', user.username);
+    }
+  }, [user]);
+
+  // Gérer l'événement de frappe avec debounce
+  const handleTyping = useCallback(() => {
     if (!selectedChat || !user) return;
     
+    // Identifier la conversation (room)
     const chatId = isGroup(selectedChat) ? selectedChat.id : `dm_${user.id}_${selectedChat.id}`;
-    emitTyping(chatId);
-  };
+    
+    // Émettre l'événement de frappe
+    emitTyping(chatId, user.id);
+    
+    // Annuler le timeout précédent s'il existe
+    if (typingTimeoutRef.current[user.id]) {
+      clearTimeout(typingTimeoutRef.current[user.id]);
+    }
+    
+    // Programmer l'arrêt après 3 secondes d'inactivité
+    typingTimeoutRef.current[user.id] = setTimeout(() => {
+      console.log('Typing timeout elapsed, stopping typing signal');
+      stopTyping(chatId, user.id);
+    }, 3000);
+  }, [selectedChat, user]);
+
+  // Configurer les écouteurs d'événements pour les événements de frappe
+  useEffect(() => {
+    if (!user) return;
+    
+    // Fonction de gestion pour l'événement de frappe
+    const handleUserTyping = (data: { chatId: string; userId: string; username: string }) => {
+      console.log('Received typing event in component:', data);
+      
+      // Ignorer ses propres événements de frappe
+      if (data.userId === user.id) return;
+      
+      // Vérifier si l'événement concerne la conversation active
+      const currentChatId = selectedChat 
+        ? (isGroup(selectedChat) ? selectedChat.id : `dm_${user.id}_${selectedChat.id}`) 
+        : null;
+      
+      if (data.chatId === currentChatId) {
+        // Mettre à jour la liste des utilisateurs en train de taper
+        setTypingUsers(prev => ({
+          ...prev,
+          [data.userId]: data.username
+        }));
+      }
+    };
+    
+    // Fonction de gestion pour l'événement d'arrêt de frappe
+    const handleUserStopTyping = (data: { chatId: string; userId: string; username: string }) => {
+      console.log('Received stop typing event in component:', data);
+      
+      // Ignorer ses propres événements d'arrêt de frappe
+      if (data.userId === user.id) return;
+      
+      // Vérifier si l'événement concerne la conversation active
+      const currentChatId = selectedChat 
+        ? (isGroup(selectedChat) ? selectedChat.id : `dm_${user.id}_${selectedChat.id}`) 
+        : null;
+      
+      if (data.chatId === currentChatId) {
+        // Retirer l'utilisateur de la liste des personnes en train de taper
+        setTypingUsers(prev => {
+          const updated = { ...prev };
+          delete updated[data.userId];
+          return updated;
+        });
+      }
+    };
+    
+    // S'abonner aux événements
+    onUserTyping(handleUserTyping);
+    onUserStopTyping(handleUserStopTyping);
+    
+    // Cleanup: désabonnement des événements et nettoyage des timeouts
+    return () => {
+      // Nettoyer tous les timeouts
+      Object.values(typingTimeoutRef.current).forEach(timeout => {
+        clearTimeout(timeout);
+      });
+      
+      // Se désabonner des événements
+      onUserTyping(() => {});
+      onUserStopTyping(() => {});
+    };
+  }, [selectedChat, user]);
 
   // Load messages for selected chat
   const loadMessages = useCallback(async (chatId: string, isGroup: boolean) => {
@@ -475,7 +676,7 @@ const Chat = () => {
       setSelectedMemberToBan(null);
       loadGroups();
     } catch (error) {
-      console.error('Error banning member:', error);
+      console.error('Erreur:', error);
     }
   };
 
@@ -487,7 +688,7 @@ const Chat = () => {
       const updatedBans = await getBannedMembers(selectedChat.id);
       setBannedMembers(updatedBans);
     } catch (error) {
-      console.error('Error unbanning member:', error);
+      console.error('erreur', error);
     }
   }
 
@@ -521,22 +722,302 @@ const Chat = () => {
     }
   };
 
+  // Ajoutez cette fonction pour gérer le jeu TicTacToe
+  const handlePlayTicTacToe = (index: number) => {
+    if (!selectedChat || !user || !socket) return;
+    
+    const chatId = isGroup(selectedChat) ? selectedChat.id : `dm_${user.id}_${selectedChat.id}`;
+    console.log('Playing move in chat:', chatId, 'at index:', index);
+    socket.emit('play_move', { chatId, index });
+  };
+
+  // Fonction pour fermer le jeu TicTacToe
+  const handleCloseGame = useCallback(() => {
+    if (!selectedChat || !user || !socket) return;
+    
+    const chatId = isGroup(selectedChat) ? selectedChat.id : `dm_${user.id}_${selectedChat.id}`;
+    closeGame(chatId);
+    setGameState(null);
+  }, [selectedChat, user]);
+
+  // Ajoutez cette fonction pour démarrer une partie de Tic-Tac-Toe
+  const handleStartGame = useCallback(() => {
+    if (!selectedChat || !user || !socket) return;
+
+    // Ensure the game only works in direct messages (not in group chats)
+    if (isGroup(selectedChat)) {
+      console.warn('Tic Tac Toe is only available in direct messages.');
+      const warningMessage: Message = {
+        id: Date.now().toString(),
+        content: 'Le jeu Tic Tac Toe est uniquement disponible dans les messages directs.',
+        sender_id: 'system',
+        receiver_id: user.id,
+        group_id: selectedChat.id,
+        created_at: new Date().toISOString(),
+        sender: {
+          id: 'system',
+          username: 'Système',
+          email: '',
+          avatar: '',
+        },
+        is_deleted: false,
+        timestamp: new Date().toISOString(),
+        reply_to_id: null,
+      };
+      setMessages((prev) => [...prev, warningMessage]);
+      return;
+    }
+
+    const chatId = `dm_${user.id}_${selectedChat.id}`;
+    const inviteeId = selectedChat.id;
+
+    console.log('Starting new game in chat:', chatId);
+
+    // Send a game invitation to the opponent
+    sendGameInvitation(chatId, user.id, inviteeId);
+
+    // Update the game state for the inviter
+    setGameState({
+      board: Array(9).fill(null),
+      currentPlayer: 'X',
+      winner: null,
+      waitingForPlayer: true,
+    });
+
+    // Add a temporary message to indicate the invitation
+    const inviteMessage: Message = {
+      id: Date.now().toString(),
+      content: `Vous avez invité ${selectedChat.username} à jouer au Tic Tac Toe. En attente de réponse...`,
+      sender_id: 'system',
+      receiver_id: user.id,
+      group_id: undefined,
+      created_at: new Date().toISOString(),
+      sender: {
+        id: 'system',
+        username: 'Système',
+        email: '',
+        avatar: '',
+      },
+      is_deleted: false,
+      timestamp: new Date().toISOString(),
+      reply_to_id: null,
+    };
+
+    setMessages((prev) => [...prev, inviteMessage]);
+  }, [selectedChat, user]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    // Listen for game invitations
+    socket.on('game_invitation', (data) => {
+      console.log('Received game invitation:', data);
+
+      // Add a message to the chat for the invitation
+      const inviteMessage: Message = {
+        id: Date.now().toString(),
+        content: `${data.inviterId} vous invite à jouer au Tic Tac Toe! Cliquez sur "Rejoindre" pour commencer la partie.`,
+        sender_id: 'system',
+        receiver_id: user?.id,
+        group_id: isGroup(selectedChat) ? selectedChat.id : undefined,
+        created_at: new Date().toISOString(),
+        sender: {
+          id: 'system',
+          username: 'Système',
+          email: '',
+          avatar: '',
+        },
+        is_deleted: false,
+        timestamp: new Date().toISOString(),
+        reply_to_id: null,
+      };
+
+      setMessages((prev) => [...prev, inviteMessage]);
+    });
+
+    return () => {
+      if (socket) {
+        socket.off('game_invitation');
+      }
+    };
+  }, [socket, user, selectedChat]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    // Listen for game invitation acceptance
+    socket.on('game_invitation_accepted', (data) => {
+      console.log('Game invitation accepted:', data);
+
+      // Start the game
+      setGameState({
+        board: Array(9).fill(null),
+        currentPlayer: 'X',
+        winner: null,
+      });
+    });
+
+    // Listen for game invitation timeout
+    socket.on('game_timeout', (data) => {
+      console.log('Game invitation timed out:', data);
+
+      // Add a message indicating the timeout
+      const timeoutMessage: Message = {
+        id: Date.now().toString(),
+        content: `L'invitation à jouer au Tic Tac Toe a expiré.`,
+        sender_id: 'system',
+        receiver_id: user?.id,
+        group_id: isGroup(selectedChat) ? selectedChat.id : undefined,
+        created_at: new Date().toISOString(),
+        sender: {
+          id: 'system',
+          username: 'Système',
+          email: '',
+          avatar: '',
+        },
+        is_deleted: false,
+        timestamp: new Date().toISOString(),
+        reply_to_id: null,
+      };
+
+      setMessages((prev) => [...prev, timeoutMessage]);
+      setGameState(null); // Close the game
+    });
+
+    return () => {
+      if (socket) {
+        socket.off('game_invitation_accepted');
+        socket.off('game_timeout');
+      }
+    };
+  }, [socket, user, selectedChat]);
+
+  useEffect(() => {
+    if (!socket) return;
+  
+    // Écouter les messages
+    socket.on('message', (message) => {
+      // Only add message if it's for the current chat
+      if (selectedChat && (
+        (isGroup(selectedChat) && message.group_id === selectedChat.id) ||
+        (!isGroup(selectedChat) && (
+          (message.sender_id === selectedChat.id && message.receiver_id === user?.id) ||
+          (message.sender_id === user?.id && message.receiver_id === selectedChat.id)
+        ))
+      )) {
+        setMessages(prev => {
+          // Avoid duplicate messages
+          if (prev.some(m => m.id === message.id)) {
+            return prev;
+          }
+          
+          // Si l'utilisateur n'est pas au bas de la conversation et il ne s'agit pas de son propre message
+          if (!isAtBottom && message.sender_id !== user?.id) {
+            setHasNewMessages(true);
+          }
+          
+          return [...prev, message];
+        });
+      }
+    });
+  
+    // Écouter les mises à jour des utilisateurs en ligne
+    socket.on('user_online', (userId) => {
+      setOnlineUsers((prev) => new Set(prev).add(userId));
+    });
+  
+    // Écouter les mises à jour des utilisateurs hors ligne
+    socket.on('user_offline', (userId) => {
+      setOnlineUsers((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(userId);
+        return newSet;
+      });
+    });
+  
+    // Écouter les timeouts de jeu
+    socket.on('game_timeout', (data) => {
+      // Afficher un message temporaire dans le chat
+      const timeoutMessage: Message = {
+        id: Date.now().toString(),
+        content: data.message,
+        sender_id: 'system',
+        receiver_id: selectedChat && isGroup(selectedChat) ? undefined : user?.id,
+        group_id: selectedChat && isGroup(selectedChat) ? selectedChat.id : undefined,
+        created_at: new Date().toISOString(),
+        sender: {
+          id: 'system',
+          username: 'Système',
+          email: '',
+          avatar: '',
+        },
+        is_deleted: false,
+        timestamp: new Date().toISOString(),
+        reply_to_id: null,
+      };
+      
+      setMessages(prev => [...prev, timeoutMessage]);
+      
+      // Fermer le jeu
+      setGameState(null);
+    });
+  
+    return () => {
+      // Cleanup socket listeners
+      if (socket) {
+        socket.off('message');
+        socket.off('user_online');
+        socket.off('user_offline');
+        socket.off('game_timeout');
+      }
+    };
+  }, [socket, user, selectedChat]);
+  
+  // Ajouter cet écouteur pour les refus d'invitation aux jeux
+  useEffect(() => {
+    if (!socket) return;
+  
+    // Écouter les refus d'invitation
+    socket.on('game_invitation_declined', (data) => {
+      // Afficher un message temporaire dans le chat
+      const declinedMessage: Message = {
+        id: Date.now().toString(),
+        content: `${data.username} a refusé votre invitation à jouer au Tic Tac Toe.`,
+        sender_id: 'system',
+        receiver_id: selectedChat && isGroup(selectedChat) ? undefined : user?.id,
+        group_id: selectedChat && isGroup(selectedChat) ? selectedChat.id : undefined,
+        created_at: new Date().toISOString(),
+        sender: {
+          id: 'system',
+          username: 'Système',
+          email: '',
+          avatar: '',
+        },
+        is_deleted: false,
+        timestamp: new Date().toISOString(),
+        reply_to_id: null,
+      };
+      
+      setMessages(prev => [...prev, declinedMessage]);
+      
+      // Fermer le jeu pour l'initiateur
+      setGameState(null);
+    });
+  
+    return () => {
+      // Cleanup socket listeners
+      if (socket) {
+        socket.off('game_invitation_declined');
+      }
+    };
+  }, [socket, user, selectedChat]);
+  
   // Render method
   if (user === null || !initialized) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-  
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <p className="text-gray-600">Please log in to access the chat</p>
         </div>
       </div>
     );
@@ -596,7 +1077,7 @@ const Chat = () => {
                 </button>
               </div>
               {searchOpen && (
-                <div className="mt-4">
+                <div className="mt-4 bg-white shadow-lg rounded-lg p-4 z-20">
                   <UserSearch
                     onSelectUser={(user) => {
                       handleAddContact(user);
@@ -781,13 +1262,28 @@ const Chat = () => {
                         onDoubleClick={(e) => handleContextMenu(e, message)} // Add double-click handler
                         className="relative"
                       >
-                        <ChatMessage
-                          message={message}
-                          sender={message.sender}
-                          isOwnMessage={message.sender_id === user?.id}
-                          isGroupAdmin={isGroup(selectedChat) && selectedChat.members.find(m => m.id === user?.id)?.is_admin}
-                          onMessageUpdate={handleMessageUpdate}
-                        />
+                        {/* Vérifiez si c'est un message d'invitation de jeu */}
+                        {message.sender_id === 'system' && message.game_invitation ? (
+                          <div className="p-3 bg-violet-100 rounded-lg text-violet-700 my-2">
+                            <p>{message.content}</p>
+                            <div className="mt-2">
+                              <button 
+                                onClick={handleStartGame}
+                                className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700 transition-colors"
+                              >
+                                Rejoindre la partie
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <ChatMessage
+                            message={message}
+                            sender={message.sender}
+                            isOwnMessage={message.sender_id === user?.id}
+                            isGroupAdmin={isGroup(selectedChat) && selectedChat.members.find(m => m.id === user?.id)?.is_admin}
+                            onMessageUpdate={handleMessageUpdate}
+                          />
+                        )}
                       </div>
                     ))}
                   <div ref={messagesEndRef} />
@@ -826,25 +1322,25 @@ const Chat = () => {
               )}
             </div>
 
+            {/* Typing Indicator - Positioned just above ChatInput */}
+            <div className="px-4 pb-1">
+              {Object.keys(typingUsers).length > 0 && (
+                <TypingIndicator
+                  isVisible={true}
+                  typingUsers={Object.values(typingUsers)}
+                />
+              )}
+            </div>
+
             <ChatInput 
               onSendMessage={handleSendMessage}
               onTyping={handleTyping}
+              selectedChat={selectedChat} // Passer selectedChat comme prop
+              user={user} // Passer user comme prop
+              onStartGame={handleStartGame} // Ajoutez cette prop
             />
             
-            {/* Typing Indicator */}
-            {Object.entries(typingUsers).map(([userId]) => {
-              const typingUser = isGroup(selectedChat)
-                ? selectedChat.members.find(m => m.id === userId)
-                : contacts.find(c => c.id === userId);
-              
-              if (!typingUser) return null;
-              
-              return (
-                <div key={userId} className="px-4 py-2 text-sm text-gray-500 italic bg-violet-50/50 border-t border-violet-100">
-                  {typingUser.username} est en train d'écrire...
-                </div>
-              );
-            })}
+            
 
             {/* Bouton pour scroller vers les nouveaux messages */}
             {hasNewMessages && !isAtBottom && (
@@ -857,6 +1353,15 @@ const Chat = () => {
                   <ChevronDown className="h-4 w-4" /> {/* Ensure ChevronDown is imported */}
                 </div>
               </button>
+            )}
+            {selectedChat && gameState && (
+              <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[999] bg-white/90 backdrop-blur-sm rounded-xl shadow-2xl p-2 border border-violet-200">
+                <TicTacToe
+                  gameState={gameState}
+                  onPlayMove={handlePlayTicTacToe}
+                  onClose={handleCloseGame}
+                />
+              </div>
             )}
           </>
         ) : (
@@ -1121,7 +1626,7 @@ const Chat = () => {
   );
 }
 
-function isGroup(chat: User | Group): chat is Group {
+function isGroup(chat: User | Group | null): chat is Group {
   return Boolean(chat && 'members' in chat);
 }
 

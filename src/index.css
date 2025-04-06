@@ -1,3 +1,5 @@
+/* eslint-disable */
+/* stylelint-disable */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -52,5 +54,178 @@
   
   .sidebar-item.active {
     @apply bg-indigo-50 text-indigo-700;
+  }
+}
+
+/* Styles spécifiques pour l'AudioPlayer */
+.audio-player-container {
+  @apply flex items-center rounded-xl overflow-hidden shadow-md;
+}
+
+.audio-player-button {
+  @apply flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-colors;
+}
+
+.audio-player-button-playing {
+  @apply bg-indigo-700 hover:bg-indigo-800 text-white;
+}
+
+.audio-player-button-paused {
+  @apply bg-indigo-100 dark:bg-gray-700 hover:bg-indigo-200 dark:hover:bg-gray-600 text-indigo-600 dark:text-white;
+}
+
+.audio-player-slider {
+  @apply w-full h-1.5 rounded-full appearance-none cursor-pointer;
+}
+
+.audio-player-time {
+  @apply text-xs;
+}
+
+/* Animations pour les emojis */
+@keyframes burst {
+  0% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.8) rotate(180deg);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.5) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+@keyframes fire {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 0.8;
+  }
+  40% {
+    transform: translateY(-30px) scale(1.4) rotate(5deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-60px) scale(2) rotate(-5deg);
+    opacity: 0;
+  }
+}
+
+@keyframes rocket {
+  0% {
+    transform: translateY(0) translateX(0) rotate(45deg);
+    opacity: 0.9;
+  }
+  40% {
+    transform: translateY(-60px) translateX(60px) rotate(90deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-120px) translateX(120px) rotate(135deg);
+    opacity: 0;
+  }
+}
+
+@keyframes sparkle {
+  0% {
+    transform: scale(1) rotate(0deg);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.3) rotate(180deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.5) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+@keyframes confetti {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateY(-30px) rotate(180deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-60px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+/* Effet de fumée spécifique pour les animations */
+@keyframes dissipate {
+  0% {
+    opacity: 0.8;
+    transform: scale(1) rotate(0deg);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.5) rotate(45deg);
+    filter: blur(8px);
+  }
+}
+
+.smoke-particle {
+  position: absolute;
+  transform-origin: center;
+  background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 70%);
+}
+
+.animate-dissipate {
+  animation: dissipate 1.5s ease-out forwards;
+}
+
+.animate-burst {
+  animation: burst 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-fire {
+  animation: fire 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-rocket {
+  animation: rocket 1.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-sparkle {
+  animation: sparkle 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-confetti {
+  animation: confetti 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.tic-tac-toe {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+.tic-tac-toe button {
+  width: 4rem;
+  height: 4rem;
+  font-size: 1.5rem;
+  font-weight: bold;
+  text-align: center;
+  border: 1px solid #ccc;
+  background-color: #f9f9f9;
+  cursor: pointer;
+}
+.tic-tac-toe button:disabled {
+  background-color: #e0e0e0;
+  cursor: not-allowed;
+}
+@keyframes scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
   }
 }

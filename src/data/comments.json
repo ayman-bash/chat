@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "name": "Ahmed",
+    "designation": "Developer",
+    "content": "je suis Ahmed le développeur de ce projet",
+    "rating": 5
+  },
+  {
+    "id": 2,
+    "name": "Ali",
+    "designation": "utilisateur",
+    "content": "wow c'est génial",
+    "rating": 3
+  },
+  {
+    "id": 3,
+    "name": "Khaled",
+    "designation": "utilisateur",
+    "content": "c'est un bon projet",
+    "rating": 3
+  },
+  {
+    "id": 4,
+    "name": "Seydou Ba",
+    "designation": "Enseignant et encadrant",
+    "content": "Je suis très satisfait de ce projet, il est très bien fait et je le recommande à tous mes étudiants,bon travail Ahmed",
+    "rating": 5
+  }
+]

@@ -3,6 +3,12 @@ export interface User {
   username: string;
   email: string;
   avatar: string;
+  security_question1?: string;
+  security_question2?: string;
+  security_answer1?: string;
+  security_answer2?: string;
+  is_admin?: boolean;  // Add this property explicitly as boolean
+  [key: string]: string | undefined | boolean;  // Update index signature to allow boolean values
 }
 
 export interface UnreadCount {
@@ -27,6 +33,8 @@ export interface Message {
   is_deleted: boolean;
   is_read?: boolean;
   receiver?: User;
+  edited_at?: string;
+  game_invitation?: boolean; // Nouvelle propriété pour les invitations de jeu
 }
 
 export interface Group {

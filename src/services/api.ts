@@ -258,26 +258,85 @@ export async function getBannedMembers(groupId: string) {
 
 export async function uploadFile(file: File): Promise<string> {
   try {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Math.random()}.${fileExt}`;
-    const filePath = `${fileName}`;
+    // Create a FormData object to send the file
+    const formData = new FormData();
+    formData.append('file', file);
 
-    const { error: uploadError } = await supabase.storage // Removed unused 'data'
-      .from('message-images')
-      .upload(filePath, file);
+    // Get backend URL from environment variable with fallback
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+    console.log(`🔼 Attempting to upload file to: ${backendUrl}/api/upload`);
+    console.log(`📦 File details: ${file.name}, type: ${file.type}, size: ${file.size / 1024}KB`);
 
-    if (uploadError) {
-      throw uploadError;
+    // Use the backend API to upload the file with timeout and better error handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 sec timeout
+
+    try {
+      const response = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Server error during file upload:', errorText);
+        throw new Error(`Server responded with ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ File uploaded successfully:', data);
+      return data.fileUrl;
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.error('❌ File upload timed out after 30 seconds');
+        throw new Error('Upload request timed out. Please try again.');
+      }
+      throw fetchError;
     }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('message-images')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
   } catch (error) {
-    console.error('Error uploading file:', error);
-    throw error;
+    console.error('❌ Error uploading file:', error);
+    
+    // Fallback options with enhanced logging
+    console.log('🔄 Trying alternative upload methods...');
+    
+    // For audio files, use object URL as temporary fallback
+    if (file.type.startsWith('audio/')) {
+      const objectUrl = URL.createObjectURL(file);
+      console.log('✅ Created temporary object URL for audio:', objectUrl);
+      console.warn('⚠️ This is a temporary URL and will not persist after page reload');
+      return objectUrl;
+    }
+    
+    // For other files, try Supabase storage
+    try {
+      console.log('🔄 Attempting fallback upload to Supabase...');
+      const fileName = `${Date.now()}_${file.name}`;
+      const filePath = `uploads/${fileName}`;
+      
+      const { error: uploadError } = await supabase.storage
+        .from('media-files')
+        .upload(filePath, file);
+      
+      if (uploadError) throw uploadError;
+      
+      // Get the public URL of the uploaded file
+      const { data: urlData } = supabase.storage
+        .from('media-files')
+        .getPublicUrl(filePath);
+      
+      if (urlData?.publicUrl) {
+        console.log('Fallback upload successful:', urlData.publicUrl);
+        return urlData.publicUrl;
+      }
+      throw new Error('Failed to get public URL from Supabase');
+    } catch (fallbackError) {
+      console.error('❌ Both primary and fallback upload methods failed');
+      throw error;
+    }
   }
 }
 
@@ -294,8 +353,49 @@ export async function sendMessage(
     let imageUrl = null;
     
     if (image) {
-      imageUrl = await uploadFile(image);
+      console.log(`Preparing to upload: ${image.name}, type: ${image.type}, size: ${image.size}`);
+      try {
+        // For audio files, use the backend upload endpoint directly
+        if (image.type.startsWith('audio/')) {
+          console.log('Uploading audio file to backend');
+          imageUrl = await uploadFile(image);
+          console.log('Audio upload successful, URL:', imageUrl);
+        } else {
+          // For other files, use Supabase storage
+          console.log('Uploading non-audio file to Supabase');
+          imageUrl = await uploadFile(image);
+        }
+      } catch (uploadError) {
+        console.error('Error uploading file:', uploadError);
+        
+        // For audio files, create a temporary URL for previewing
+        if (image.type.startsWith('audio/')) {
+          imageUrl = URL.createObjectURL(image);
+          console.log('Created temporary URL for audio preview:', imageUrl);
+        }
+      }
     }
+
+    // Ensure we're getting the proper user info before inserting
+    const { error: userError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', user.id)
+      .single();
+
+    if (userError) {
+      console.error('Error fetching user data:', userError);
+      throw userError;
+    }
+
+    // Extra debug information before inserting message
+    console.log('Inserting message with data:', {
+      content,
+      sender_id: user.id,
+      receiver_id: receiverId,
+      group_id: groupId,
+      image: imageUrl
+    });
 
     const { data, error } = await supabase
       .from('messages')
@@ -311,7 +411,12 @@ export async function sendMessage(
       .select('*, sender:users!sender_id(*), receiver:users!receiver_id(*)')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error when inserting message:', error);
+      throw error;
+    }
+    
+    console.log('Message inserted successfully:', data);
     return data;
   } catch (error) {
     console.error('Error sending message:', error);
@@ -345,5 +450,109 @@ export async function deleteMessage(messageId: string) {
     });
 
   if (error) throw error;
+  return data;
+}
+
+export async function validateSecurityAnswers(
+  email: string, 
+  securityAnswer1: string, 
+  securityAnswer2: string
+): Promise<boolean> {
+  try {
+    // Vérifier d'abord si la fonction RPC existe
+    const { error: checkError } = await supabase.rpc('validate_security_answers', {
+      user_email: email,
+      answer1: 'test',
+      answer2: 'test'
+    });
+    
+    // Si la fonction n'existe pas, faire une vérification manuelle
+    if (checkError && (checkError.code === 'PGRST301' || checkError.message.includes('does not exist'))) {
+      // Fallback: vérifier manuellement les réponses
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('security_answer1, security_answer2')
+        .eq('email', email)
+        .single();
+      
+      if (userError) {
+        if (userError.code === 'PGRST204' && userError.message.includes('security_answer')) {
+          throw new Error("La récupération de compte n'est pas encore disponible. Veuillez contacter l'administrateur.");
+        }
+        throw userError;
+      }
+      
+      return userData.security_answer1 === securityAnswer1 && 
+             userData.security_answer2 === securityAnswer2;
+    }
+    
+    // Utiliser la fonction RPC si elle existe
+    const { data, error } = await supabase.rpc('validate_security_answers', {
+      user_email: email,
+      answer1: securityAnswer1,
+      answer2: securityAnswer2
+    });
+
+    if (error) throw error;
+    return !!data;
+  } catch (error) {
+    console.error('Error validating security answers:', error);
+    throw new Error('Impossible de vérifier vos réponses. Veuillez réessayer.');
+  }
+}
+
+export async function resetPassword(email: string, newPassword: string): Promise<void> {
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+
+    if (error) throw error;
+    
+    // Ensuite, nous devons mettre à jour le mot de passe dans la base de données
+    // Cette logique varie selon votre implémentation réelle
+    const { error: updateError } = await supabase
+      .rpc('reset_user_password', {
+        user_email: email,
+        new_password: newPassword
+      });
+    
+    if (updateError) throw updateError;
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    throw new Error('Impossible de réinitialiser votre mot de passe. Veuillez réessayer.');
+  }
+}
+
+/**
+ * Updates the security questions for a user.
+ * @param userId - The ID of the user.
+ * @param question1 - The first security question.
+ * @param answer1 - The answer to the first security question.
+ * @param question2 - The second security question.
+ * @param answer2 - The answer to the second security question.
+ */
+export async function updateSecurityQuestions(
+  userId: string,
+  question1: string,
+  answer1: string,
+  question2: string,
+  answer2: string
+) {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      security_question1: question1,
+      security_answer1: answer1,
+      security_question2: question2,
+      security_answer2: answer2,
+    })
+    .eq('id', userId);
+
+  if (error) {
+    console.error('Error updating security questions:', error);
+    throw new Error("Erreur lors de la mise à jour des questions de sécurité.");
+  }
+
   return data;
 }
